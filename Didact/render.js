@@ -1,8 +1,10 @@
 const createDom = (fiber) => {
-  console.log(fiber);
-  const dom = fiber.type === 'TEXT_ELEMENT' ? document.createTextNode('') : document.createElement(fiber.type);
+  const dom =
+    fiber.type === "TEXT_ELEMENT"
+      ? document.createTextNode("")
+      : document.createElement(fiber.type);
 
-  const isProperty = (key) => key !== 'children';
+  const isProperty = (key) => key !== "children";
   Object.keys(fiber.props)
     .filter(isProperty)
     .forEach((name) => {
@@ -13,14 +15,31 @@ const createDom = (fiber) => {
 };
 
 let nextUnitOfWork = null;
+let wipRoot = null;
 
 export const render = (element, container) => {
-  nextUnitOfWork = {
+  wipRoot = {
     dom: container,
     props: {
       children: [element],
     },
   };
+  nextUnitOfWork = wipRoot;
+};
+
+const commitWork = (fiber) => {
+  if(!fiber) {
+    return;
+  }
+  const domParent = fiber.parent.dom;
+  domParent.appendChild(fiber.dom);
+  commitWork(fiber.child);
+  commitWork(fiber.sibling);
+}
+
+const commitRoot = () => {
+  commitWork(wipRoot.child);
+  wipRoot = null;
 };
 
 const workLoop = (deadline) => {
@@ -29,6 +48,11 @@ const workLoop = (deadline) => {
     nextUnitOfWork = performUnitOfWork(nextUnitOfWork);
     shouldYield = deadline.timeRemaining() < 1;
   }
+
+  if (!nextUnitOfWork && wipRoot) {
+    commitRoot();
+  }
+
   requestIdleCallback(workLoop);
 };
 
@@ -40,10 +64,10 @@ const performUnitOfWork = (fiber) => {
     fiber.dom = createDom(fiber);
   }
 
-  // fiberに親がある場合、親要素の子として登録
-  if (fiber.parent) {
-    fiber.parent.dom.appendChild(fiber.dom);
-  }
+  // // fiberに親がある場合、親要素の子として登録
+  // if (fiber.parent) {
+  //   fiber.parent.dom.appendChild(fiber.dom);
+  // }
 
   // fiberの子要素・兄弟要素を見つけ、ターゲットfiberに登録する
   const elements = fiber.props.children;
