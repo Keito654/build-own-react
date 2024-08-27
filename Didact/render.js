@@ -1,14 +1,12 @@
 const createDom = (fiber) => {
-  const dom =
-    fiber.type === "TEXT_ELEMENT"
-      ? document.createTextNode("")
-      : document.createElement(element.type);
+  console.log(fiber);
+  const dom = fiber.type === 'TEXT_ELEMENT' ? document.createTextNode('') : document.createElement(fiber.type);
 
-  const isProperty = (key) => key !== "children";
-  Object.keys(element.props)
+  const isProperty = (key) => key !== 'children';
+  Object.keys(fiber.props)
     .filter(isProperty)
     .forEach((name) => {
-      dom[name] = element.props[name];
+      dom[name] = fiber.props[name];
     });
 
   return dom;
@@ -37,14 +35,17 @@ const workLoop = (deadline) => {
 requestIdleCallback(workLoop);
 
 const performUnitOfWork = (fiber) => {
+  // fiberをdomに登録する
   if (!fiber.dom) {
     fiber.dom = createDom(fiber);
   }
 
+  // fiberに親がある場合、親要素の子として登録
   if (fiber.parent) {
     fiber.parent.dom.appendChild(fiber.dom);
   }
 
+  // fiberの子要素・兄弟要素を見つけ、ターゲットfiberに登録する
   const elements = fiber.props.children;
   let index = 0;
   let prevSibling = null;
@@ -67,5 +68,20 @@ const performUnitOfWork = (fiber) => {
 
     prevSibling = newFiber;
     index++;
+  }
+
+  // ターゲットfiberに子要素がある場合、次は子要素で実行
+  if (fiber.child) {
+    return fiber.child;
+  }
+
+  // 兄弟要素が登録されている場合、次は兄弟要素
+  // なければ親要素の兄弟要素に移動する
+  let nextFiber = fiber;
+  while (nextFiber) {
+    if (nextFiber.sibling) {
+      return nextFiber.sibling;
+    }
+    nextFiber = nextFiber.parent;
   }
 };
