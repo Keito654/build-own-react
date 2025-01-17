@@ -1,4 +1,4 @@
-import * as Didact from "./Didact"
+import * as Didact from './Didact';
 
 /** @jsx Didact.createElement */
 const element = (
@@ -6,6 +6,6 @@ const element = (
     <a>bar</a>
     <b />
   </div>
-)
-const container = document.getElementById("root")
-Didact.render(element, container)
+);
+const container = document.getElementById('root');
+Didact.render(element, container);
