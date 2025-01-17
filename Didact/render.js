@@ -7,6 +7,9 @@
  * @property {string} [type] - 要素のタイプ（例：'div', 'span', 'TEXT_ELEMENT'）
  * @property {Fiber | undefined} [child] - 子となるファイバー
  * @property {Fiber | undefined} [sibling] - 兄弟となるファイバー
+ * @property {Fiber | undefined} [alternate] - 現在コミットされているDOMのFiberツリー
+ * @property {"UPDATE" | "PLACEMENT" | "DELETION"} [effectTag] - レンダリング時どのような影響があったかを表すタグ
+ *
  *
  */
 
@@ -17,21 +20,74 @@
 let nextUnitOfWork = null;
 
 /**
+ * DOMに登録するFiberツリー構造
+ * @type {Fiber | null}
+ */
+let wipRoot = null;
+
+/**
+ * 現在コミットされているDOMのFiberツリー
+ * @type {Fiber | null}
+ */
+let currentRoot = null;
+
+/**
+ * 今回のコミットで削除するノード
+ * @type {Fiber[] | null}
+ */
+let deletions = null;
+
+/**
  * レンダー関数
  * @param {Fiber} element - レンダリングする要素
  * @param {HTMLElement} container - 要素をマウントするコンテナ
  */
 export const render = (element, container) => {
-  nextUnitOfWork = {
+  wipRoot = {
     dom: container,
     props: {
       children: [element],
     },
+    alternate: currentRoot,
   };
+  deletions = [];
+
+  nextUnitOfWork = wipRoot;
 };
 
 /** ブラウザが準備でき次第workLoopを開始する */
 window.requestIdleCallback(workLoop);
+
+/**
+ * DOMを登録する
+ */
+function commitRoot() {
+  commitWork(wipRoot.child);
+  currentRoot = wipRoot;
+  wipRoot = null;
+}
+
+/**
+ * fiberにあるElementをDOMノードに登録する
+ * @param {Fiber} fiber - DOMノードに登録を行うfiber
+ */
+function commitWork(fiber) {
+  if (!fiber) {
+    return;
+  }
+
+  const domParent = fiber.parent.dom;
+  if (fiber.effectTag === 'PLACEMENT' && fiber.dom !== null) {
+    domParent.appendChild(fiber.dom);
+  } else if (fiber.effectTag === 'UPDATE' && fiber.dom !== null) {
+    updateDom(fiber.dom, fiber.alternate.props, fiber.props);
+  } else if (fiber.effectTag === 'DELETION') {
+    domParent.removeChild(fiber.dom);
+  }
+
+  commitWork(fiber.child);
+  commitWork(fiber.sibling);
+}
 
 /**
  * requestIdCallbackで行われるループ作業を定義
@@ -47,6 +103,11 @@ function workLoop(deadline) {
     // 各反復で、現在のタイムスライスの残り時間が1ミリ秒未満であるかどうかをチェックし、
     // もし残り時間が1ミリ秒未満であれば、shouldYieldがtrueに設定され、ループが終了する
     shouldYield = deadline.timeRemaining() < 1;
+  }
+
+  // nextUnitOfWorkがなくなり、fiberツリーが完成したらDOMに登録する
+  if (!nextUnitOfWork && wipRoot) {
+    commitRoot();
   }
 
   // 最後に、window.requestIdleCallbackメソッドが呼び出され、次のアイドル期間に再度workLoop関数が実行されるようにスケジュールされる
@@ -67,34 +128,9 @@ function performUnitOfWork(fiber) {
     fiber.dom = createDom(fiber);
   }
 
-  // fiberに対応するdomが作成できている場合、親要素に対してdomを追加
-  if (fiber.dom) {
-    fiber.parent.dom.append(fiber.dom);
-  }
-
   // 2. 新しいfiberを作成
   const elements = fiber.props.children;
-
-  elements.reduce((previousElement, currentTargetElement, index) => {
-    /** @type {Fiber} */
-    const newFiber = {
-      type: currentTargetElement.type,
-      props: currentTargetElement.props,
-      parent: currentTargetElement.parent,
-      dom: null,
-    };
-
-    if (index === 0) {
-      fiber.child = newFiber;
-    } else {
-      // childrenにある最初の要素以外は兄弟要素として登録
-      // 兄弟要素を数珠つなぎにしていくイメージ
-      previousElement.sibling = newFiber;
-    }
-
-    // 次回previousElementとなり兄弟要素が登録される
-    return newFiber;
-  }, fiber);
+  reconcileChildren(fiber, elements);
 
   // 3. 次の作業を返す
   // もし子要素があれば、子要素を次の作業として返す
@@ -128,4 +164,115 @@ function createDom(fiber) {
     });
 
   return dom;
+}
+
+const isNew = (prev, next) => (key) => prev[key] !== next[key];
+const isGone = (prev, next) => (key) => !(key in next);
+const isEvent = (key) => key.startsWith('on');
+const isProperty = (key) => key !== 'children' && !isEvent(key);
+
+/**
+ * DOMのPropsを更新する
+ * @param {HTMLElement | Text} dom
+ * @param {Object} prevProps
+ * @param {Object} nextProps
+ */
+function updateDom(dom, prevProps, nextProps) {
+  // 古いPropsを削除
+  Object.keys(prevProps)
+    .filter(isProperty)
+    .filter(isGone(prevProps, nextProps))
+    .forEach((name) => {
+      dom[name] = '';
+    });
+
+  Object.keys(nextProps)
+    .filter(isProperty)
+    .filter(isNew(prevProps, nextProps))
+    .forEach((name) => {
+      dom[name] = nextProps[name];
+    });
+
+  // イベントリスナーは削除・登録方法が異なるため別に処理する
+  Object.keys(prevProps)
+    .filter(isEvent)
+    .filter((key) => !(key in nextProps) || isNew(prevProps, nextProps)(key))
+    .forEach((name) => {
+      const eventType = name.toLowerCase().substring(2);
+      dom.removeEventListener(eventType, prevProps[name]);
+    });
+
+  Object.keys(nextProps)
+    .filter(isEvent)
+    .filter(isNew(prevProps, nextProps))
+    .forEach((name) => {
+      const eventType = name.toLowerCase().substring(2);
+      dom.addEventListener(eventType, nextProps[name]);
+    });
+}
+
+/**
+ * 子要素のfiberを作成する
+ * @param {Fiber} wipFiber - 対象Fiber
+ * @param {Fiber[]} elements - 対象のfiberの子要素
+ */
+function reconcileChildren(wipFiber, elements) {
+  // 古いファイバーがある場合、新しいelementと比較する処理を入れる
+  let index = 0;
+  let oldFiber = wipFiber.alternate && wipFiber.alternate.child;
+
+  /** @type {Fiber | null} - 前回のループでsiblingとなったFiberの参照を保管 */
+  let prevSibling = null;
+
+  while (index < elements.length || (oldFiber !== null && oldFiber !== undefined)) {
+    const element = elements[index];
+
+    /** @type {Fiber | null} */
+    let newFiber = null;
+
+    const isSameType = oldFiber && element && element.type === oldFiber.type;
+
+    // 同一タイプの場合、DOMを新しくつくらずpropsを更新するだけ
+    if (isSameType) {
+      newFiber = {
+        type: oldFiber.type,
+        props: oldFiber.props,
+        dom: oldFiber.dom,
+        parent: wipFiber,
+        alternate: oldFiber,
+        effectTag: 'UPDATE',
+      };
+    }
+
+    // elementがあり、古いものと一致しない→新しいDOMを追加
+    if (element && !isSameType) {
+      newFiber = {
+        type: element.type,
+        props: element.props,
+        dom: null,
+        parent: wipFiber,
+        alternate: null,
+        effectTag: 'PLACEMENT',
+      };
+    }
+
+    // oldFiberがあり、古いものと一致しない→古いDOMを削除
+    if (oldFiber && !isSameType) {
+      oldFiber.effectTag = 'DELETION';
+      deletions.push(oldFiber);
+    }
+
+    if (oldFiber) {
+      oldFiber = oldFiber.sibling;
+    }
+
+    if (index === 0) {
+      wipFiber.child = newFiber;
+    } else {
+      prevSibling.sibling = newFiber;
+    }
+
+    prevSibling = newFiber;
+    index++;
+  }
 }
