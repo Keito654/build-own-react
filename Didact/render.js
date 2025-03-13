@@ -8,6 +8,7 @@
  * @property {Fiber | undefined} [child] - 子となるファイバー
  * @property {Fiber | undefined} [sibling] - 兄弟となるファイバー
  * @property {Fiber | undefined} [alternate] - 現在コミットされているDOMのFiberツリー
+ * @property {{state: any}[]} [hooks] - hooks
  * @property {"UPDATE" | "PLACEMENT" | "DELETION"} [effectTag] - レンダリング時どのような影響があったかを表すタグ
  *
  *
@@ -36,6 +37,18 @@ let currentRoot = null;
  * @type {Fiber[] | null}
  */
 let deletions = null;
+
+/**
+ * 現在作業中のFiber
+ * @type {Fiber | null}
+ */
+let wipFiber = null;
+
+/**
+ * hookのインデックス（useStateが複数個ある場合に見分けるため利用）
+ * @type {number | null}
+ */
+let hookIndex = null;
 
 /**
  * レンダー関数
@@ -172,8 +185,43 @@ function performUnitOfWork(fiber) {
  * @returns {Fiber | null} - 次の作業単位
  */
 function updateFunctionComponent(fiber) {
+  wipFiber = fiber;
+  hookIndex = 0;
+  wipFiber.hooks = [];
   const children = [fiber.type(fiber.props)];
   reconcileChildren(fiber, children);
+}
+
+export function useState(initial) {
+  const oldHook = wipFiber.alternate !== null && wipFiber.alternate.hooks && wipFiber.alternate.hooks[hookIndex];
+  const hook = {
+    state: oldHook ? oldHook.state : initial,
+    queue: [],
+  };
+
+  const actions = oldHook ? oldHook.queue : [];
+  actions.forEach((action) => {
+    if (action instanceof Function) {
+      hook.state = action(hook.state);
+    } else {
+      hook.state = action;
+    }
+  });
+
+  const setState = (action) => {
+    hook.queue.push(action);
+    wipRoot = {
+      dom: currentRoot.dom,
+      props: currentRoot.props,
+      alternate: currentRoot,
+    };
+    nextUnitOfWork = wipRoot;
+    deletions = [];
+  };
+
+  wipFiber.hooks.push(hook);
+  hookIndex++;
+  return [hook.state, setState];
 }
 
 /**
