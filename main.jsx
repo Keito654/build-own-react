@@ -1,16 +1,33 @@
 import * as Didact from './Didact';
 
 /** @jsx Didact.createElement */
-const element = (
-  <div id="foo">
-    <a>bar</a>
-    <b />
-    <p>第二のテキストノード</p>
-    <div>
-      aaa
-      <span>fdsfsdfsd</span>
-    </div>
-  </div>
-);
 const container = document.getElementById('root');
-Didact.render(element, container);
+
+const App = (props) => {
+  return (
+    <div>
+      <h1>はいどーもどついたれ本舗です</h1>
+      <TextArea value={props.name} />
+    </div>
+  );
+};
+
+const TextArea = ({ value }) => {
+  return <p>{value}</p>;
+};
+
+const updateValue = (e) => {
+  rerender(e.target.value);
+};
+
+const rerender = (value) => {
+  const element = (
+    <div>
+      <input oninput={updateValue} value={value} />
+      <App name={value} />
+    </div>
+  );
+  Didact.render(element, container);
+};
+
+rerender('World');

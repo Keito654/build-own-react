@@ -4,7 +4,7 @@
  * @property {Object} props - プロパティ
  * @property {Fiber[]} props.children - 子要素の配列
  * @property {Fiber} [parent] - 親ファイバー
- * @property {string} [type] - 要素のタイプ（例：'div', 'span', 'TEXT_ELEMENT'）
+ * @property {string | (props: Fiber["props"]) => Fiber} [type] - 要素のタイプ（例：'div', 'span', 'TEXT_ELEMENT'）
  * @property {Fiber | undefined} [child] - 子となるファイバー
  * @property {Fiber | undefined} [sibling] - 兄弟となるファイバー
  * @property {Fiber | undefined} [alternate] - 現在コミットされているDOMのFiberツリー
@@ -52,6 +52,7 @@ export const render = (element, container) => {
   };
   deletions = [];
 
+  // wipRootがFiberとなる
   nextUnitOfWork = wipRoot;
 };
 
@@ -62,6 +63,7 @@ window.requestIdleCallback(workLoop);
  * DOMを登録する
  */
 function commitRoot() {
+  deletions.forEach(commitWork);
   commitWork(wipRoot.child);
   currentRoot = wipRoot;
   wipRoot = null;
@@ -76,17 +78,36 @@ function commitWork(fiber) {
     return;
   }
 
-  const domParent = fiber.parent.dom;
+  // DOMノードを持つファイバーが見つかるまでファイバーツリーを上に移動
+  let domParentFiber = fiber.parent;
+  while (!domParentFiber.dom) {
+    domParentFiber = domParentFiber.parent;
+  }
+  const domParent = domParentFiber.dom;
+
   if (fiber.effectTag === 'PLACEMENT' && fiber.dom !== null) {
     domParent.appendChild(fiber.dom);
   } else if (fiber.effectTag === 'UPDATE' && fiber.dom !== null) {
     updateDom(fiber.dom, fiber.alternate.props, fiber.props);
   } else if (fiber.effectTag === 'DELETION') {
-    domParent.removeChild(fiber.dom);
+    commitDeletion(fiber, domParent);
   }
 
   commitWork(fiber.child);
   commitWork(fiber.sibling);
+}
+
+/**
+ * ノードを削除するときは、DOMノードを持つ子が見つかるまで探索を続行
+ * @param {Fiber} fiber
+ * @param {HTMLElement | Text} domParent
+ */
+function commitDeletion(fiber, domParent) {
+  if (fiber.dom) {
+    domParent.removeChild(fiber.dom);
+  } else {
+    commitDeletion(fiber.child, domParent);
+  }
 }
 
 /**
@@ -122,15 +143,12 @@ function workLoop(deadline) {
  * @returns {Fiber | null} - 次の作業単位
  */
 function performUnitOfWork(fiber) {
-  // 1.domをnodeに登録
-  // fiberに対応するdomが格納されていない場合、新しく生成し保管
-  if (!fiber.dom) {
-    fiber.dom = createDom(fiber);
+  const isFunctionComponent = fiber.type instanceof Function;
+  if (isFunctionComponent) {
+    updateFunctionComponent(fiber);
+  } else {
+    updateHostComponent(fiber);
   }
-
-  // 2. 新しいfiberを作成
-  const elements = fiber.props.children;
-  reconcileChildren(fiber, elements);
 
   // 3. 次の作業を返す
   // もし子要素があれば、子要素を次の作業として返す
@@ -146,6 +164,32 @@ function performUnitOfWork(fiber) {
 
     nextFiber = nextFiber.parent;
   }
+}
+
+/**
+ * 関数コンポーネントのファイバーを処理する
+ * @param {Fiber} fiber - 現在のファイバー
+ * @returns {Fiber | null} - 次の作業単位
+ */
+function updateFunctionComponent(fiber) {
+  const children = [fiber.type(fiber.props)];
+  reconcileChildren(fiber, children);
+}
+
+/**
+ * 関数コンポーネントでないファイバーを処理する
+ * @param {Fiber} fiber - 現在のファイバー
+ * @returns {Fiber | null} - 次の作業単位
+ */
+function updateHostComponent(fiber) {
+  // 1.domをnodeに登録
+  // fiberに対応するdomが格納されていない場合、新しく生成し保管
+  if (!fiber.dom) {
+    fiber.dom = createDom(fiber);
+  }
+
+  const elements = fiber.props.children;
+  reconcileChildren(fiber, elements);
 }
 
 /**
@@ -236,7 +280,7 @@ function reconcileChildren(wipFiber, elements) {
     if (isSameType) {
       newFiber = {
         type: oldFiber.type,
-        props: oldFiber.props,
+        props: element.props,
         dom: oldFiber.dom,
         parent: wipFiber,
         alternate: oldFiber,
